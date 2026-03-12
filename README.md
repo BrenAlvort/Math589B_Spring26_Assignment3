@@ -29,7 +29,6 @@ This repository is set up so students can move from theory to code without havin
 - `src/python/modal_lqr.py` - Python starter library plus demo driver
 - `src/python/run_demo.py` - generate plots and optional animation frames
 - `src/python/scan_actuator.py` - compare actuator locations
-- `src/matlab/modal_lqr_square.m` - MATLAB starter code
 - `tests/test_coupling.py` - basic coupling tests
 - `tests/test_reconstruction.py` - basic reconstruction tests
 - `PROJECT_TASKS.md` - student-facing milestones and suggested checkpoints
@@ -89,11 +88,6 @@ To compare actuator locations,
 ```bash
 python -m src.python.scan_actuator
 ```
-
-## MATLAB quick start
-
-Open `src/matlab/modal_lqr_square.m` and run it. It uses `lqr`, so the Control System Toolbox is expected.
-
 ## Suggested research questions
 
 1. How does actuator location affect controllability of the truncated system?
