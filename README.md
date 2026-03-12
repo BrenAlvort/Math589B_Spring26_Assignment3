@@ -170,7 +170,7 @@ The project can be assigned at different levels:
 
 ## Animation
 
-![Animated Membrane](file://./outputs/membrane.gif)
+![Animated Membrane](https://github.com/Arizona-Math/Math589B_Spring26_Assignment3/blob/main/outputs/membrane.gif)
 
 
 
