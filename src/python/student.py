@@ -25,14 +25,7 @@ def solve_continuous_are(
 
         A^T P + P A - P B R^{-1} B^T P + Q = 0
 
-    by the direct Hamiltonian-eigenvector method.
-
-    This follows the handout/numbook prescription:
-      1) form the Hamiltonian matrix
-      2) compute its eigendecomposition
-      3) select eigenvectors for eigenvalues with negative real part
-      4) partition them into V1, V2
-      5) return P = V2 V1^{-1}
+    using the direct Hamiltonian method.
     """
     A = np.array(A, dtype=float, copy=False)
     B = np.array(B, dtype=float, copy=False)
@@ -40,18 +33,18 @@ def solve_continuous_are(
     R = np.array(R, dtype=float, copy=False)
 
     n = A.shape[0]
-    if A.shape != (n, n):
+
+    if A.ndim != 2 or A.shape[1] != n:
         raise ValueError("A must be square.")
     if Q.shape != (n, n):
         raise ValueError("Q must have the same shape as A.")
-    if B.shape[0] != n:
+    if B.ndim != 2 or B.shape[0] != n:
         raise ValueError("B must have the same number of rows as A.")
-    if R.shape[0] != R.shape[1]:
+    if R.ndim != 2 or R.shape[0] != R.shape[1]:
         raise ValueError("R must be square.")
 
     R_inv = np.linalg.inv(R)
 
-    # Hamiltonian matrix
     H = np.block([
         [A, -B @ R_inv @ B.T],
         [-Q, -A.T],
@@ -59,23 +52,21 @@ def solve_continuous_are(
 
     eigvals, eigvecs = np.linalg.eig(H)
 
-    # Stable subspace: eigenvalues with strictly negative real part
     stable_idx = np.where(np.real(eigvals) < 0.0)[0]
     if stable_idx.size != n:
         raise np.linalg.LinAlgError(
             f"Expected {n} stable eigenvalues, found {stable_idx.size}."
         )
 
-    Vstable = eigvecs[:, stable_idx]
-    V1 = Vstable[:n, :]
-    V2 = Vstable[n:, :]
+    V = eigvecs[:, stable_idx]
+    V1 = V[:n, :]
+    V2 = V[n:, :]
 
-    # P = V2 * V1^{-1}
+    if np.linalg.matrix_rank(V1) < n:
+        raise np.linalg.LinAlgError("Stable invariant subspace is singular.")
+
     P = V2 @ np.linalg.inv(V1)
 
-    # Numerical cleanup:
-    # the exact solution is real symmetric, but eigen computations can
-    # introduce tiny imaginary / asymmetry errors.
     P = np.real_if_close(P, tol=1000)
     P = np.asarray(P, dtype=float)
     P = 0.5 * (P + P.T)
@@ -89,10 +80,6 @@ def _rk4_step(
     y: np.ndarray,
     h: float,
 ) -> np.ndarray:
-    """
-    One classical RK4 step:
-        y_{n+1} = y_n + h/6 (k1 + 2 k2 + 2 k3 + k4)
-    """
     k1 = np.asarray(f(t, y), dtype=float)
     k2 = np.asarray(f(t + 0.5 * h, y + 0.5 * h * k1), dtype=float)
     k3 = np.asarray(f(t + 0.5 * h, y + 0.5 * h * k2), dtype=float)
@@ -111,23 +98,19 @@ def solve_ivp(
     **kwargs,
 ) -> OdeResult:
     """
-    Minimal SciPy-like IVP solver sufficient for modal_lqr.py.
+    Minimal SciPy-like IVP solver sufficient for this project.
 
-    This implementation uses classical RK4, which is explicitly presented
-    in the numbook. For this project, modal_lqr.py supplies a dense uniform
-    t_eval, so we march exactly from one requested time to the next.
-
-    Parameters kept for signature compatibility:
-        rtol, atol, kwargs
-    are accepted but not used for adaptivity.
+    Uses classical RK4 and returns an object with attributes .t and .y.
+    Parameters rtol, atol, and kwargs are accepted for compatibility.
     """
-    del rtol, atol, kwargs  # accepted only for compatibility
+    del rtol, atol, kwargs
 
-    t0, tf = float(t_span[0]), float(t_span[1])
+    t0 = float(t_span[0])
+    tf = float(t_span[1])
+
     y0 = np.asarray(y0, dtype=float)
-
     if y0.ndim != 1:
-        raise ValueError("y0 must be a one-dimensional array.")
+        raise ValueError("y0 must be one-dimensional.")
 
     if args:
         def f(t: float, y: np.ndarray) -> np.ndarray:
@@ -137,9 +120,7 @@ def solve_ivp(
             return np.asarray(fun(t, y), dtype=float)
 
     if t_eval is None:
-        # Fallback grid if none is given
-        nsteps = 1000
-        t = np.linspace(t0, tf, nsteps + 1)
+        t = np.linspace(t0, tf, 1001)
     else:
         t = np.asarray(list(t_eval), dtype=float)
         if t.ndim != 1:
