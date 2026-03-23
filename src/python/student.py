@@ -25,7 +25,7 @@ def solve_continuous_are(
 
         A^T P + P A - P B R^{-1} B^T P + Q = 0
 
-    using the direct Hamiltonian method.
+    using the direct Hamiltonian invariant-subspace method.
     """
     A = np.array(A, dtype=float, copy=False)
     B = np.array(B, dtype=float, copy=False)
@@ -34,9 +34,9 @@ def solve_continuous_are(
 
     n = A.shape[0]
 
-    if A.ndim != 2 or A.shape[1] != n:
+    if A.ndim != 2 or A.shape != (n, n):
         raise ValueError("A must be square.")
-    if Q.shape != (n, n):
+    if Q.ndim != 2 or Q.shape != (n, n):
         raise ValueError("Q must have the same shape as A.")
     if B.ndim != 2 or B.shape[0] != n:
         raise ValueError("B must have the same number of rows as A.")
@@ -67,10 +67,15 @@ def solve_continuous_are(
 
     P = V2 @ np.linalg.inv(V1)
 
-    P = np.real_if_close(P, tol=1000)
-    P = np.asarray(P, dtype=float)
-    P = 0.5 * (P + P.T)
+    # The exact solution is real symmetric; clean numerical noise carefully.
+    imag_norm = np.max(np.abs(np.imag(P)))
+    if imag_norm > 1e-7:
+        raise np.linalg.LinAlgError(
+            f"Riccati solution has non-negligible imaginary part: {imag_norm:.3e}"
+        )
 
+    P = np.real(P)
+    P = 0.5 * (P + P.T)
     return P
 
 
@@ -80,11 +85,74 @@ def _rk4_step(
     y: np.ndarray,
     h: float,
 ) -> np.ndarray:
+    """
+    One classical RK4 step:
+        y_{n+1} = y_n + h/6 (k1 + 2k2 + 2k3 + k4)
+    """
     k1 = np.asarray(f(t, y), dtype=float)
     k2 = np.asarray(f(t + 0.5 * h, y + 0.5 * h * k1), dtype=float)
     k3 = np.asarray(f(t + 0.5 * h, y + 0.5 * h * k2), dtype=float)
     k4 = np.asarray(f(t + h, y + h * k3), dtype=float)
     return y + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+
+def _adaptive_rk4_segment(
+    f: Callable[[float, np.ndarray], np.ndarray],
+    t0: float,
+    y0: np.ndarray,
+    t1: float,
+    rtol: float,
+    atol: float,
+) -> np.ndarray:
+    """
+    Integrate from t0 to t1 using adaptive RK4 with step doubling.
+
+    Error estimate:
+      one full step of size h  vs  two half-steps of size h/2.
+    """
+    direction = np.sign(t1 - t0)
+    if direction == 0.0:
+        return y0.copy()
+
+    interval = abs(t1 - t0)
+
+    # Conservative initial step. This is intentionally smaller than the raw output spacing.
+    h = min(interval, 1e-3)
+    t = t0
+    y = y0.copy()
+
+    while direction * (t1 - t) > 0:
+        h = min(h, abs(t1 - t))
+        h_signed = direction * h
+
+        y_big = _rk4_step(f, t, y, h_signed)
+        y_half = _rk4_step(f, t, y, 0.5 * h_signed)
+        y_small = _rk4_step(f, t + 0.5 * h_signed, y_half, 0.5 * h_signed)
+
+        err = y_small - y_big
+        scale = atol + rtol * np.maximum(np.abs(y_small), np.abs(y))
+        err_norm = np.max(np.abs(err) / scale)
+
+        if err_norm <= 1.0:
+            # Accept the more accurate two-half-step value.
+            t = t + h_signed
+            y = y_small
+
+            # Grow step cautiously.
+            if err_norm == 0.0:
+                factor = 2.0
+            else:
+                factor = min(2.0, max(1.2, 0.9 * err_norm ** (-0.2)))
+            h = min(interval, h * factor)
+        else:
+            # Reject and reduce step.
+            factor = max(0.1, 0.9 * err_norm ** (-0.2))
+            h = h * factor
+
+            if h < 1e-12:
+                raise RuntimeError("Adaptive RK4 step size underflow.")
+
+    return y
 
 
 def solve_ivp(
@@ -98,12 +166,14 @@ def solve_ivp(
     **kwargs,
 ) -> OdeResult:
     """
-    Minimal SciPy-like IVP solver sufficient for this project.
+    Minimal SciPy-like IVP solver sufficient for modal_lqr.py.
 
-    Uses classical RK4 and returns an object with attributes .t and .y.
-    Parameters rtol, atol, and kwargs are accepted for compatibility.
+    Uses classical RK4 with adaptive step doubling between consecutive
+    output times. This keeps compatibility with the handout requirement
+    while resolving higher-frequency modes much better than one RK4 step
+    per output interval.
     """
-    del rtol, atol, kwargs
+    del kwargs  # accepted only for compatibility
 
     t0 = float(t_span[0])
     tf = float(t_span[1])
@@ -135,8 +205,20 @@ def solve_ivp(
     y = np.zeros((n, m), dtype=float)
     y[:, 0] = y0
 
+    current_t = t[0]
+    current_y = y0.copy()
+
     for j in range(m - 1):
-        h = t[j + 1] - t[j]
-        y[:, j + 1] = _rk4_step(f, t[j], y[:, j], h)
+        next_t = t[j + 1]
+        current_y = _adaptive_rk4_segment(
+            f,
+            current_t,
+            current_y,
+            next_t,
+            rtol=rtol,
+            atol=atol,
+        )
+        current_t = next_t
+        y[:, j + 1] = current_y
 
     return OdeResult(t=t, y=y)
